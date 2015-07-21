@@ -210,6 +210,63 @@ void InnerProductLayer::ComputeGradient(Phase phas) {
     gsrc=dot(grad, weight.T());
   }
 }
+
+
+
+/***********  Implementing layers used in RNNLM application ***********/
+/*********** Implementation for VocabLayer **********/
+VocabLayer::~VocabLayer() {
+    delete weight_;
+}
+
+
+void VocabLayer::Setup(const LayerProto& proto, int npartitions) {
+    Layer::Setup(proto, npartitions);
+    CHECK_EQ(srclayers_.size(), 2); //VocabLayer has 2 src layers, 1st one: SigmoidLayer, 2nd one: LabelParser
+    const auto& sigmoidData = srclayers_[0]->data(this);  //"this" is the current layer; No need to use the srclayers_[1] in setup here
+    const auto& labelData = srclayers_[1]->data(this);
+    batchsize_= sigmoidData.shape()[0];
+    vdim_ = sigmoidData.count()/batchsize_;   //dimension of input
+    hdim_ = labelData->getVocabSize(); //TODO implement it on LabelParser layer (or obtain this from user config info); hdim_ is the dimension of output
+    if(partition_dim()>0)   //for partitioning
+    hdim_ /= npartitions;
+    data_.Reshape(vector<int>{batchsize_, hdim_});
+    grad_.ReshapeLike(data_);
+    Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
+    weight_ = factory->Create("Param");
+    weight_->Setup(proto.param(0), vector<int>{vdim_, hdim_});  // No need to transpose the original weight matrix
+}
+
+void VocabLayer::ComputeFeature(Phase phase, Metric* perf) {
+    auto data = Tensor2(&data_);
+    auto sigmoidData = Tensor2(srclayers_[0]->mutable_data(this));  //mutable_data means data with a variable length
+    auto labelData = Tensor2(srclayers_[1]->mutable_data(this));    //start, end
+    auto weight = Tensor2(weight_->mutable_data());
+    CHECK_EQ(sigmoidData.shape[0], 1);  //check whether the batch_size is "1", if not return error; now can only deal with situation when batch_size is 1
+
+    memset(data.dptr, 0, sizeof(float) * data.shape[0] * data.shape[1]);    //Initialization
+    auto startVocabIndex = labelData[0][0];
+    auto endVocabIndex = labelData[0][1];
+    auto weightSlice = weight.Slice(startVocabIndex, endVocabIndex);    //Not sure "from mshadow"; the words corresponding to the ground truth class
+    weightSlice = dot(sigmoidData, weightSlice);
+    memcpy(data.dptr + startVocabIndex * data.shape[0], weightSlice.dptr, sizeof(float) * (endVocabIndex - startVocabIndex) * data.shape[0]);
+
+    /* 3-loop to compute the data result - can deal with condition when batch_size is larger than 1
+    for(int i = 0; i < sigmoidData.shape[0]; i++){
+        for(int j = labelData[0][i]; j < labelData[1][i]; j++){ //TODO labelData: 0 - start; 1 - end
+            for(int k = 0; k < sigmoidData.shape[1]; k++){
+                data[j][i] += sigmoidData[k][i] * labelData[j][k];
+            }
+        }
+    }*/
+}
+
+void VocabLayer::ComputeGradient(Phase phase){
+
+}
+
+
+
 /*****************************************************************************
  * Implementation for LabelLayer
  *****************************************************************************/

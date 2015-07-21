@@ -77,10 +77,17 @@ message Record {
   enum Type {
     // each record contains image raw feature and its label.
     kSingleLabelImage = 0;
+	// For implementation of Recurrent Neural Network
+	// each class contains corresponding words in this class
+	kWordClass = 1;
+	// each record contains string name, integer index and corresponding class index
+	kSingleWord = 2;
   }
   optional Type type = 1 [default = kSingleLabelImage];
   // configuration for
   optional SingleLabelImageRecord image = 2;
+  optional WordClassRecord class = 3;
+  optional SingleWordRecord word = 4;
 }
 
 message SingleLabelImageRecord {
@@ -88,6 +95,19 @@ message SingleLabelImageRecord {
   optional int32 label = 2;
   optional bytes pixel = 3;
   repeated float data = 4 [packed = true];
+}
+
+// For implementation of Recurrent Neural Network
+message WordClassRecord{
+  //repeated SingleWordRecord word = 1;
+  optional int32 start; // the index of the start word in this class;
+  optional int32 end; // the index of the end word in this class + 1, i.e., the index of the start word in the next class
+}
+
+message SingleWordRecord {
+  repeated bytes name = 1; //or use "optional string"?
+  optional int32 vocab_index = 2;   // the index of this word in the vocabulary
+  optional int32 class_index = 3;   // the index of the class corresponding to this word
 }
 
 message MetricProto {

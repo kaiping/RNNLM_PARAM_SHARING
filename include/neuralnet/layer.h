@@ -101,6 +101,51 @@ class InnerProductLayer: public Layer {
   Param* weight_, *bias_;
 };
 
+
+
+/***********  Implementing layers used in RNNLM application ***********/
+
+/* RnnlmVocabLayer */
+class VocabLayer: public Layer {
+public:
+    using Layer::ComputeFeature;
+    using Layer::ComputeGradient;
+
+    void Setup(const LayerProto& proto, int npartitions) override;//need to change the row, column order
+    void ComputeFeature(Phase phase, Metric *perf) override;
+    void ComputeGradient(Phase phase) override;
+
+    /*Return the connection type between one neuron of this layer and its source layer.
+   * Currently support two connection types: kOneToOne, and kOneToAll.
+   * kOneToOne indicates the neuron depends on only one neuron from src layer.
+   * kOneToAll indicates the neuron depends on all neurons from src layer.*/
+    ConnectionType src_neuron_connection(int k) const override {
+        // CHECK_LT(k, srclayers_.size());
+        return kOneToAll;
+    }
+
+    const vector<Param*> GetParams() const override {
+        vector<Param*> params{weight_};
+        // This is a new method to quickly declare a new vector;
+        // Delete the parameter "bias" as there is no need to use “bias” according to the paper
+        return params;
+    }
+    ~VocabLayer();
+
+
+private:
+    //! dimension of the hidden layer
+    int hdim_;//dimension of output
+    //! dimension of the visible layer
+    int vdim_;//dimension of input
+    int batchsize_;
+    Param* weight_; // Delete the parameter "bias" as there is no need to use “bias” according to the paper
+};
+
+
+
+
+
 class LabelLayer: public ParserLayer {
  public:
   using ParserLayer::ParseRecords;
