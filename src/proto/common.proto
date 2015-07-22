@@ -100,8 +100,8 @@ message SingleLabelImageRecord {
 // For implementation of Recurrent Neural Network
 message WordClassRecord{
   //repeated SingleWordRecord word = 1;
-  optional int32 start; // the index of the start word in this class;
-  optional int32 end; // the index of the end word in this class + 1, i.e., the index of the start word in the next class
+  optional int32 start = 1; // the index of the start word in this class;
+  optional int32 end = 2; // the index of the end word in this class + 1, i.e., the index of the start word in the next class
 }
 
 message SingleWordRecord {
