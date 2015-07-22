@@ -295,6 +295,45 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){  //TODO later
 }
 
 
+/*********** Implementation for RnnlmSigmoidLayer **********/
+//This layer is like a combination of InnerProductLayer and ActivationLayer
+RnnlmSigmoidLayer::~RnnlmSigmoidLayer() {
+    delete weight_;
+}
+
+void RnnlmSigmoidLayer::Setup(const LayerProto& proto, int npartitions) {
+    Layer::Setup(proto, npartitions);
+    CHECK_EQ(srclayers_.size(), 1); //RnnlmSigmoidLayer has 1 src layers: RnnlmInnerproductLayer
+    const auto& innerproductData = srclayers_[0]->data(this);
+    windowsize_= innerproductData.shape()[0];
+    vdim_ = innerproductData.count()/windowsize_;   //e.g, 30; dimension of input
+    hdim_ = vdim_;  //e.g, 30; dimension of output
+    data_.ReshapeLike(srclayers_[0]->data(this));
+    grad_.ReshapeLike(srclayers_[0]->grad(this));
+    Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
+    weight_ = factory->Create("Param");
+    weight_->Setup(proto.param(0), vector<int>{hdim_, hdim_});  // (30, 30) weight matrix between s(t-1) and s(t)
+}
+
+void RnnlmSigmoidLayer::ComputeFeature(Phase phase, Metric* perf) {
+    auto data = Tensor2(&data_);
+    auto src = Tensor2(srclayers_[0]->mutable_data(this)); //Shape for src is (window_size, 30)
+    auto weight = Tensor2(weight_->mutable_data());
+    //First compute the s(t-1) * W part, then add the sigmoid part of input
+    for(int t = 0; t < windowsize_; t++){   //Skip the 1st component
+        if(t == 0){
+            //memset(data[t].dptr, 0, sizeof(float) * hdim_);   //Actually no need for this initialization
+            data[t] = F<op::sigmoid>(src[t]);
+        }
+        else{
+            data[t] = dot(data[t - 1], weight) + F<op::sigmoid>(src[t]);
+        }
+    }
+}
+
+void RnnlmSigmoidLayer::ComputeGradient(Phase phase){  //TODO later
+
+}
 
 /*****************************************************************************
  * Implementation for LabelLayer

@@ -104,7 +104,9 @@ class InnerProductLayer: public Layer {
 
 
 /***********  Implementing layers used in RNNLM application ***********/
-/* RnnlmComputationLayer */
+/**
+  * RnnlmComputationLayer, this layer will receive the ground truth and then compute the SUM(log(probability))
+  */
 class RnnlmComputationLayer: public Layer {
 public:
     using Layer::ComputeFeature;
@@ -123,7 +125,7 @@ public:
         vector<Param*> params{weight_};
         return params;
     }
-    ~VocabLayer();
+    ~RnnlmComputationLayer();
 
 
 private:
@@ -140,6 +142,39 @@ private:
 };
 
 
+/**
+  * RnnlmSigmoidLayer, this layer will make use of information from previous time stamp
+  */
+class RnnlmSigmoidLayer: public Layer {
+public:
+    using Layer::ComputeFeature;
+    using Layer::ComputeGradient;
+
+    void Setup(const LayerProto& proto, int npartitions) override;//need to change the row, column order
+    void ComputeFeature(Phase phase, Metric *perf) override;
+    void ComputeGradient(Phase phase) override;
+
+    ConnectionType src_neuron_connection(int k) const override {
+        // CHECK_LT(k, srclayers_.size());
+        return kOneToAll;
+    }
+
+    const vector<Param*> GetParams() const override {
+        vector<Param*> params{weight_};
+        return params;
+    }
+    ~RnnlmSigmoidLayer();
+
+
+private:
+    //! dimension of the hidden layer
+    int hdim_;//dimension of output
+    //! dimension of the visible layer
+    int vdim_;//dimension of input
+    //int batchsize_;
+    int windowsize_; // Use windowsize_ to represent different timestamps
+    Param* weight_; // The weight matrix between s(t-1) and s(t)
+};
 
 
 
