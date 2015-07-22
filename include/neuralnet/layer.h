@@ -104,9 +104,8 @@ class InnerProductLayer: public Layer {
 
 
 /***********  Implementing layers used in RNNLM application ***********/
-
-/* RnnlmVocabLayer */
-class VocabLayer: public Layer {
+/* RnnlmComputationLayer */
+class RnnlmComputationLayer: public Layer {
 public:
     using Layer::ComputeFeature;
     using Layer::ComputeGradient;
@@ -115,10 +114,6 @@ public:
     void ComputeFeature(Phase phase, Metric *perf) override;
     void ComputeGradient(Phase phase) override;
 
-    /*Return the connection type between one neuron of this layer and its source layer.
-   * Currently support two connection types: kOneToOne, and kOneToAll.
-   * kOneToOne indicates the neuron depends on only one neuron from src layer.
-   * kOneToAll indicates the neuron depends on all neurons from src layer.*/
     ConnectionType src_neuron_connection(int k) const override {
         // CHECK_LT(k, srclayers_.size());
         return kOneToAll;
@@ -126,8 +121,6 @@ public:
 
     const vector<Param*> GetParams() const override {
         vector<Param*> params{weight_};
-        // This is a new method to quickly declare a new vector;
-        // Delete the parameter "bias" as there is no need to use “bias” according to the paper
         return params;
     }
     ~VocabLayer();
@@ -138,8 +131,10 @@ private:
     int hdim_;//dimension of output
     //! dimension of the visible layer
     int vdim_;//dimension of input
-    int batchsize_;
+    //int batchsize_;
+    int windowsize_; // Use windowsize_ to represent different timestamps
     Param* weight_; // Delete the parameter "bias" as there is no need to use “bias” according to the paper
+    float sum_;
 };
 
 
