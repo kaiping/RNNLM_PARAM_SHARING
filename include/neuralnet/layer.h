@@ -135,6 +135,8 @@ private:
     int windowsize_; // Use windowsize_ to represent different timestamps
     Param* weight_; // Delete the parameter "bias" as there is no need to use “bias” according to the paper
     float sum_;
+    int classsize_;
+    int vocabsize_;
 };
 
 

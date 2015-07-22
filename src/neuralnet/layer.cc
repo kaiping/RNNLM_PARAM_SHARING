@@ -223,10 +223,13 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
     Layer::Setup(proto, npartitions);
     CHECK_EQ(srclayers_.size(), 2); //RnnlmComputationLayer has 2 src layers, 1st one: SigmoidLayer, 2nd one: ClassParser
     const auto& sigmoidData = srclayers_[0]->data(this);
-    const auto& labelData = srclayers_[1]->data(this);  //The order of src layers are due to conf order
+    const auto& labelData = srclayers_[1]->data(this);  //The order of src layers are due to conf order; labelData has the shape (windowsize_,4)
     windowsize_= sigmoidData.shape()[0];
     vdim_ = sigmoidData.count()/windowsize_;   //e.g, 30; dimension of input
-    hdim_ = srclayers_[1]->getVocabSize() + srclayers_[1]->getClassSize(); //e.g, 10010 if VocabSize=10000, ClassSize=10; TODO implement getVocabSize() and getClassSize() on LabelLayer
+    //TODO This will not pass compilation as srclayers_ are vector<Layer*>, use a "force type casting here" change the layer type to LabelLayer
+    classsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getClassSize(); //10 here
+    vocabsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getVocabSize(); //10000 here
+    hdim_ = classsize_ + vocabsize_; //e.g, 10010 if VocabSize=10000, ClassSize=10; TODO implement getVocabSize() and getClassSize() on LabelLayer
     data_.Reshape(vector<int>{windowsize_, hdim_});
     grad_.ReshapeLike(data_);
     Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
@@ -238,39 +241,47 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
 void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
     auto data = Tensor2(&data_);    //the dimension of data_ here is the number of words in the ground truth class, e.g, 100
     auto sigmoidData = Tensor2(srclayers_[0]->mutable_data(this));  //mutable_data means data with a variable length
-    const int * label = srclayers_[1]->data(this).cpu_data(); //a quadruple: start and end vocabulary index for the ground truth class; then the word index in vocabulary; then finally the class for the input word
+    const int * label = srclayers_[1]->data(this).cpu_data(); //The shape should be (windowsize_,4); a quadruple: start and end vocabulary index for the ground truth class; then the word index in vocabulary; then finally the class for the input word
     auto weight = Tensor2(weight_->mutable_data());
 
-    int startVocabIndex = static_cast<int>(label[0]);   //Ground truth information
-    int endVocabIndex = static_cast<int>(label[1]);
-    int wordIndex = static_cast<int>(label[2]); //ground truth word index
-    int classIndex = static_cast<int>(label[3]);    //ground truth class index
-
-    int classSize = srclayers_[1]->getClassSize();  //2 size information; here classSize = 10, vocabSize = 10000
-    int vocabSize = srclayers_[1]->getVocabSize();
-    auto weightPart1 = weight.Slice(0, classSize - 1);  //(10, 30), the slicing operation is by row
-    auto weightPart2 = weight.slice(classSize, classSize + vocabSize - 1);  //(10000, 30), the slicing operation is by row
+    auto weightPart1 = weight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
+    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
 
     //Compute y1(t), y2(t), then copy to data of RnnlmComputationLayer
     for(int t = 0; t < windowsize_; t++){
-    auto y1 = dot(sigmoidData[t], weightPart1.T());
+    int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
+    int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
+    int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
+    int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
+
     auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);
-    auto y2 = dot(sigmoidData[t], weightPart2Slice.T());
-    memcpy(data[t].dptr, y1.dptr, sizeof(float) * classSize);
-    memcpy(data[t].dptr + classSize + startVocabIndex, y2.dptr, sizeof(float) * (endVocabIndex - startVocabIndex + 1));
+    Tensor<cpu, 2> p1(data.dptr, shape2(windowsize_, classsize_));
+    p1 = dot(sigmoidData[t], weightPart1.T());
+    Tensor<cpu, 2> p2(data.dptr + windowsize_ * (classsize_ + startVocabIndex), shape2(windowsize_, endVocabIndex - startVocabIndex + 1));
+    p2 = dot(sigmoidData[t], weightPart2Slice.T()); // Directly modify the value of "data"
     }
 
     //Compute p1(t), p2(t) using the computed value of y1 and y2; Additionally compute the sum_ value
-    Tensor<cpu, 2> p1(nullptr, Shape2(windowsize_, classSize));
-    AllocSpace(p1); //Allocate the space for p1
+    Tensor<cpu, 2> p1(nullptr, Shape2(windowsize_, classsize_));
+    AllocSpace(p1); //Allocate the space for p1; after allocating the space, must free the space
     Tensor<cpu, 2> p2(nullptr, Shape2(windowsize_, endVocabIndex - startVocabIndex + 1));
     AllocSpace(p2); //Allocate the space for p2
 
     for(int t = 0; t < windowsize_; t++){
-    Softmax(p1[t], data[t].slice(0, classSize - 1));    //can be used like this? slice by column?
-    Softmax(p2[t], data[t].slice(classSize + startVocabIndex, classSize + endVocabIndex));
+    int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
+    int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
+    int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
+    int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
+    Tensor<cpu, 1> tmp1(data.dptr + t * (classsize_ + vocabsize_), Shape1(classsize_)); //cannot use slice function like this
+    Tensor<cpu, 1> tmp2(data.dptr + t * (classsize_ + vocabsize_) + classsize_ + startVocabIndex, Shape1(endVocabIndex - startVocabIndex - 1));
+
+    Softmax(p1[t], tmp1);
+    Softmax(p2[t], tmp2);
     sum_ += log(p1[t][classIndex] * p2[t][wordIndex - startVocabIndex]); //For each word respectively, add a term in the sum_
     }
+
+    FreeSpace(p1);
+    FreeSpace(p2);
 }
 
 void RnnlmComputationLayer::ComputeGradient(Phase phase){  //TODO later
