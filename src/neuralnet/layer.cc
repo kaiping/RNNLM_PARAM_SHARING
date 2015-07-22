@@ -226,9 +226,8 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
     const auto& labelData = srclayers_[1]->data(this);  //The order of src layers are due to conf order; labelData has the shape (windowsize_,4)
     windowsize_= sigmoidData.shape()[0];
     vdim_ = sigmoidData.count()/windowsize_;   //e.g, 30; dimension of input
-    //TODO This will not pass compilation as srclayers_ are vector<Layer*>, use a "force type casting here" change the layer type to LabelLayer
-    classsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getClassSize(); //10 here
-    vocabsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getVocabSize(); //10000 here
+    classsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getClassSize(); //10 here, use type casting
+    vocabsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getVocabSize(); //10000 here, use type casting
     hdim_ = classsize_ + vocabsize_; //e.g, 10010 if VocabSize=10000, ClassSize=10; TODO implement getVocabSize() and getClassSize() on LabelLayer
     data_.Reshape(vector<int>{windowsize_, hdim_});
     grad_.ReshapeLike(data_);
@@ -249,39 +248,46 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
 
     //Compute y1(t), y2(t), then copy to data of RnnlmComputationLayer
     for(int t = 0; t < windowsize_; t++){
-    int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
-    int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
-    int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
-    int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
+        int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
+        int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
+        int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
+        int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-    auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);
-    Tensor<cpu, 2> p1(data.dptr, shape2(windowsize_, classsize_));
-    p1 = dot(sigmoidData[t], weightPart1.T());
-    Tensor<cpu, 2> p2(data.dptr + windowsize_ * (classsize_ + startVocabIndex), shape2(windowsize_, endVocabIndex - startVocabIndex + 1));
-    p2 = dot(sigmoidData[t], weightPart2Slice.T()); // Directly modify the value of "data"
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);
+        Tensor<cpu, 1> y1(data.dptr + hdim_ * t, shape1(classsize_));    //hdim_ = classsize_ + vocabsize_
+        y1 = dot(sigmoidData[t], weightPart1.T());
+        Tensor<cpu, 1> y2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, shape1(endVocabIndex - startVocabIndex + 1));
+        y2 = dot(sigmoidData[t], weightPart2Slice.T()); // Directly modify the value of "data"
     }
 
-    //Compute p1(t), p2(t) using the computed value of y1 and y2; Additionally compute the sum_ value
-    Tensor<cpu, 2> p1(nullptr, Shape2(windowsize_, classsize_));
-    AllocSpace(p1); //Allocate the space for p1; after allocating the space, must free the space
-    Tensor<cpu, 2> p2(nullptr, Shape2(windowsize_, endVocabIndex - startVocabIndex + 1));
-    AllocSpace(p2); //Allocate the space for p2
-
+    //Compute p1(t), p2(t) using the computed value of y1 and y2 and then copy to the "data" of ComputationLayer; Additionally compute the sum_ value
     for(int t = 0; t < windowsize_; t++){
-    int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
-    int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
-    int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
-    int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
-    Tensor<cpu, 1> tmp1(data.dptr + t * (classsize_ + vocabsize_), Shape1(classsize_)); //cannot use slice function like this
-    Tensor<cpu, 1> tmp2(data.dptr + t * (classsize_ + vocabsize_) + classsize_ + startVocabIndex, Shape1(endVocabIndex - startVocabIndex - 1));
+        int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
+        int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
+        int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
+        int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-    Softmax(p1[t], tmp1);
-    Softmax(p2[t], tmp2);
-    sum_ += log(p1[t][classIndex] * p2[t][wordIndex - startVocabIndex]); //For each word respectively, add a term in the sum_
+        Tensor<cpu, 1> p1(nullptr, Shape1(classsize_));
+        AllocSpace(p1); //Allocate the space for p1; after allocating the space, must free the space
+        Tensor<cpu, 1> p2(nullptr, Shape1(endVocabIndex - startVocabIndex + 1));
+        AllocSpace(p2); //Allocate the space for p2
+
+        Tensor<cpu, 1> tmp1(data.dptr + hdim_ * t, Shape1(classsize_));
+        Tensor<cpu, 1> tmp2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, Shape1(endVocabIndex - startVocabIndex - 1));
+
+        Softmax(p1, tmp1);
+        Softmax(p2, tmp2);   //In Softmax(), tmp1 and tmp2 are not changed
+
+        //Then copy p1[t] and p2[t] to "data"
+        memcpy(data[t].dptr, p1.dptr, sizeof(float) * classsize_);
+        memcpy(data[t].dptr + classsize_ + startVocabIndex, p2.dptr, sizeof(float) * (endVocabIndex - startVocabIndex + 1));
+
+        //For each word respectively, add a term in the sum_
+        sum_ += log(p1[classIndex] * p2[wordIndex - startVocabIndex]);
+
+        FreeSpace(p1);
+        FreeSpace(p2);
     }
-
-    FreeSpace(p1);
-    FreeSpace(p2);
 }
 
 void RnnlmComputationLayer::ComputeGradient(Phase phase){  //TODO later
