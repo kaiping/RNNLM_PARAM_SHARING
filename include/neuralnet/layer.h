@@ -105,7 +105,7 @@ class InnerProductLayer: public Layer {
 
 /***********  Implementing layers used in RNNLM application ***********/
 /**
-  * RnnlmComputationLayer, this layer will receive the ground truth and then compute the SUM(log(probability))
+  * 1-RnnlmComputationLayer, this layer will receive the ground truth and then compute the SUM(log(probability))
   */
 class RnnlmComputationLayer: public Layer {
 public:
@@ -143,7 +143,7 @@ private:
 
 
 /**
-  * RnnlmSigmoidLayer, this layer will make use of information from previous time stamp
+  * 2-RnnlmSigmoidLayer, this layer will make use of information from previous time stamp
   */
 class RnnlmSigmoidLayer: public Layer {
 public:
@@ -174,6 +174,121 @@ private:
     //int batchsize_;
     int windowsize_; // Use windowsize_ to represent different timestamps
     Param* weight_; // The weight matrix between s(t-1) and s(t)
+};
+
+
+/**
+  * 3-RnnlmInnerproductLayer, this layer is very similar to ordinary InnerproductLayer except that the consideration for window_size
+  */
+class RnnlmInnerproductLayer: public Layer {
+ public:
+  using Layer::ComputeFeature;
+  using Layer::ComputeGradient;
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  void ComputeFeature(Phase phase, Metric *perf) override;
+  void ComputeGradient(Phase phase) override;
+
+
+  ConnectionType src_neuron_connection(int k) const override {
+    // CHECK_LT(k, srclayers_.size());
+    return kOneToAll;
+  }
+  const vector<Param*> GetParams() const override {
+    vector<Param*> params{weight_};
+    return params;
+  }
+  ~RnnlmInnerproductLayer();
+
+ private:
+  //! dimension of the hidden layer
+  int hdim_;
+  //! dimension of the visible layer
+  int vdim_;
+  int windowsize_;  //The only difference from ordinary InnerProductLayer
+  Param* weight_;
+};
+
+/**
+  * 4-RnnlmWordinputLayer, this layer is in charge of managing the input words, for each inout word index, output the |V| vector
+  * Note: the value of |V| is user-defined
+  */
+class RnnlmWordinputLayer: public Layer {
+ public:
+  using Layer::ComputeFeature;
+  using Layer::ComputeGradient;
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  void ComputeFeature(Phase phase, Metric *perf) override;
+  void ComputeGradient(Phase phase) override;
+
+
+  ConnectionType src_neuron_connection(int k) const override {  //TODO to check whether use this or not in this layer?
+    // CHECK_LT(k, srclayers_.size());
+    return kOneToAll;
+  }
+  const vector<Param*> GetParams() const override {
+    vector<Param*> params{weight_};
+    return params;
+  }
+  ~RnnlmWordinputLayer();
+
+ private:
+  //! dimension of the hidden layer
+  int hdim_;
+  //! dimension of the visible layer
+  int vdim_;
+  int windowsize_;
+  int vocabsize_;   //The size of vocabulary
+  Param* weight_;   //The weight matrix here is U, (vocab_size, |v|)
+};
+
+/**
+  * 5-RnnlmWordparserLayer - TODO to complete later
+  */
+class RnnlmWordparserLayer: public Layer {
+ public:
+  using Layer::partition_dim;   //to check later?
+  using Layer::ComputeFeature;  //What does this mean?
+  using Layer::ComputeGradient;
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  int partition_dim() const override;   //Need to return 0
+  void getVocabSize();
+
+  ~RnnlmWordparserLayer();
+ private:
+  int windowsize_;
+};
+
+/**
+  * 6-RnnlmClassparserLayer - TODO to complete later
+  */
+class RnnlmClassparserLayer: public Layer {
+ public:
+  using Layer::partition_dim;   //to check later?
+  using Layer::ComputeFeature;  //What does this mean?
+  using Layer::ComputeGradient;
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  int partition_dim() const override;   //Need to return 0
+  void getVocabSize();
+  void getClassSize();
+
+  ~RnnlmClassparserLayer();
+ private:
+  int windowsize_;
+};
+
+/**
+  * 7-RnnlmDataLayer - TODO to complete later
+  */
+class RnnlmDataLayer: public Layer {
+ public:
+  ~RnnlmDataLayer();
+
+ private:
+  int windowsize_;
 };
 
 

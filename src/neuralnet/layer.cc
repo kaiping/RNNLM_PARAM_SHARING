@@ -214,7 +214,7 @@ void InnerProductLayer::ComputeGradient(Phase phas) {
 
 
 /***********  Implementing layers used in RNNLM application ***********/
-/*********** Implementation for RnnlmComputationLayer **********/
+/*********** 1-Implementation for RnnlmComputationLayer **********/
 RnnlmComputationLayer::~RnnlmComputationLayer() {
     delete weight_;
 }
@@ -226,8 +226,8 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
     const auto& labelData = srclayers_[1]->data(this);  //The order of src layers are due to conf order; labelData has the shape (windowsize_,4)
     windowsize_= sigmoidData.shape()[0];
     vdim_ = sigmoidData.count()/windowsize_;   //e.g, 30; dimension of input
-    classsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getClassSize(); //10 here, use type casting
-    vocabsize_ = dynamic_cast<RnnLabelLayer>(srclayers_[1])->getVocabSize(); //10000 here, use type casting
+    classsize_ = dynamic_cast<RnnlmClassparserLayer>(srclayers_[1])->getClassSize(); //10 here, use type casting
+    vocabsize_ = dynamic_cast<RnnlmClassparserLayer>(srclayers_[1])->getVocabSize(); //10000 here, use type casting
     hdim_ = classsize_ + vocabsize_; //e.g, 10010 if VocabSize=10000, ClassSize=10; TODO implement getVocabSize() and getClassSize() on LabelLayer
     data_.Reshape(vector<int>{windowsize_, hdim_});
     grad_.ReshapeLike(data_);
@@ -295,7 +295,7 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){  //TODO later
 }
 
 
-/*********** Implementation for RnnlmSigmoidLayer **********/
+/*********** 2-Implementation for RnnlmSigmoidLayer **********/
 //This layer is like a combination of InnerProductLayer and ActivationLayer
 RnnlmSigmoidLayer::~RnnlmSigmoidLayer() {
     delete weight_;
@@ -334,6 +334,77 @@ void RnnlmSigmoidLayer::ComputeFeature(Phase phase, Metric* perf) {
 void RnnlmSigmoidLayer::ComputeGradient(Phase phase){  //TODO later
 
 }
+
+
+/*********** 3-Implementation for RnnlmInnerproductLayer **********/
+//The only difference between this layer type and ordinary InnerProductLayer is the consideration of window_size, i.e., time
+RnnlmInnerproductLayer::~RnnlmInnerproductLayer() {
+  delete weight_;
+}
+
+void RnnlmInnerproductLayer::Setup(const LayerProto& proto, int npartitions) {
+  Layer::Setup(proto, npartitions);
+  CHECK_EQ(srclayers_.size(), 1);
+  const auto& src=srclayers_[0]->data(this);
+  windowsize_=src.shape()[0];
+  vdim_=src.count()/windowsize_; //dimension of input, i.e., |V|
+  hdim_=proto.innerproduct_conf().num_output(); //TODO add window_size() info in model.proto & model.conf, dimension of output, e.g, 30
+  data_.Reshape(vector<int>{windowsize_, hdim_});
+  grad_.ReshapeLike(data_);
+  Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
+  weight_ = factory->Create("Param");
+  weight_->Setup(proto.param(0), vector<int>{vdim_, hdim_});
+}
+
+void RnnlmInnerproductLayer::ComputeFeature(Phase phase, Metric* perf) {
+  auto data = Tensor2(&data_);
+  auto src = Tensor2(srclayers_[0]->mutable_data(this));
+  auto weight = Tensor2(weight_->mutable_data());
+
+  for(int t = 0; t < windowsize_; t++){
+    data[t] = dot(src[t], weight);  //TODO to check whether dot( , ) function can be used between vectors and matrices
+  }
+}
+
+void InnerProductLayer::ComputeGradient(Phase phas) {  //TODO later
+
+}
+
+
+/*********** 4-Implementation for RnnlmWordinputLayer **********/
+RnnlmWordinputLayer::~RnnlmWordinputLayer() {
+  delete weight_;
+}
+
+void RnnlmWordinputLayer::Setup(const LayerProto& proto, int npartitions) {
+  Layer::Setup(proto, npartitions);
+  CHECK_EQ(srclayers_.size(), 1);
+  const auto& src=srclayers_[0]->data(this);
+  windowsize_=src.shape()[0];
+  vdim_=src.count()/windowsize_; //dimension of input, i.e., 1
+  hdim_=proto.rnnlmwordinput_conf().word_length(); // i.e., |V|
+  data_.Reshape(vector<int>{windowsize_, hdim_});
+  grad_.ReshapeLike(data_);
+  Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
+  weight_ = factory->Create("Param");
+  vocabsize_ = dynamic_cast<RnnlmWordparserLayer>(srclayers_[0])->getVocabSize();   //use type casting
+  weight_->Setup(proto.param(0), vector<int>{vocabsize_, hdim_});
+}
+
+void RnnlmWordinputLayer::ComputeFeature(Phase phase, Metric* perf) {
+  auto data = Tensor2(&data_);
+  const auto& src = srclayers_[0]->data(this);
+  auto weight = Tensor2(weight_->mutable_data());
+
+  for(int t = 0; t < windowsize_; t++){ //Then src[t] is the t'th input word index
+    data[t] = weight[src[t]];
+  }
+}
+
+void RnnlmWordinputLayer::ComputeGradient(Phase phas) {  //TODO later
+
+}
+
 
 /*****************************************************************************
  * Implementation for LabelLayer
