@@ -238,7 +238,7 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
 }
 
 void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
-    auto data = Tensor2(&data_);    //the dimension of data_ here is the number of words in the ground truth class, e.g, 100
+    auto data = Tensor2(&data_);    //(window_size, 10010)
     auto sigmoidData = Tensor2(srclayers_[0]->mutable_data(this));  //mutable_data means data with a variable length
     const int * label = srclayers_[1]->data(this).cpu_data(); //The shape should be (windowsize_,4); a quadruple: start and end vocabulary index for the ground truth class; then the word index in vocabulary; then finally the class for the input word
     auto weight = Tensor2(weight_->mutable_data());
@@ -290,8 +290,65 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
     }
 }
 
-void RnnlmComputationLayer::ComputeGradient(Phase phase){  //TODO later
+void RnnlmComputationLayer::ComputeGradient(Phase phase){
+    auto data = Tensor2(&data_);    //(win_size, 10010)
+    auto grad = Tensor2(&grad_);    //(win_size, 10010)
+    auto src = Tensor2(srclayers_[0]->mutable_data(this));
+    //auto gradPart1 = grad.T().Slice(0, classsize_ - 1); //Here we bring the slicing operation inside (10, 30)
+    //auto gradPart2 = grad.T().Slice(classsize_, classsize_ + vocabsize_ - 1);   //(10000, 30)
+    const int * label = srclayers_[1]->data(this).cpu_data();   //offer the ground truth info
 
+    auto gweight = Tensor2(weight_->mutable_grad());    //the gradient for the parameter: weight matrix
+    auto gweightPart1 = gweight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
+    auto gweightPart2 = gweight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
+
+    auto weight = Tensor2(weight_->mutable_data());
+    auto weightPart1 = weight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
+    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
+
+    auto gsrc = Tensor2(srclayers_[0]->mutable_grad(this)); //(10,30), i.e., (window_size, 30)
+
+    memset(gweight.dptr, 0 , sizeof(float) * gweight.shape[0] * gweight.shape[1]);   //Need initialization before aggregate updates in all timestamps
+
+    for(int t = 0; t < windowsize_; t++){
+        //Obtain ground truth information
+        int startVocabIndex = static_cast<int>(label[t * 4 + 0]);
+        int endVocabIndex = static_cast<int>(label[t * 4 + 1]);
+        int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
+        int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
+
+        auto gweightPart2Slice = gweightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
+        auto gradPart2Slice = gradPart2.slice(startVocabIndex. endVocabIndex + 1);  //e.g, (150, win_size)
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
+
+        //Compute the gradient for the current layer
+        for(int i = 0; i < classsize_; i++){
+            grad[t][i] = 0 - data[t][i];
+        }
+        grad[t][classIndex] = 1 - data[t][classIndex];  //Compute ground truth for the class
+
+        for(int j = classsize_; j < classsize_ + vocabsize_; j++){
+            if(j >= classsize_ + startVocabIndex && j <= classsize_ + endVocabIndex) {
+                grad[t][j] = 0 - data[t][j];
+            }
+            else {
+                grad[t][j] = 0;
+            }
+            grad[t][classsize_ + wordIndex] = 1 - data[t][classsize_ + wordIndex];  //Compute ground truth for the word
+        }
+
+        //Compute the gradient for the weight matrix, the loop is for various timestamps T
+        Tensor<cpu, 2> gradPart1 (grad[t].mutable_cpu_data(), Shape2(classsize_, 1));   //(10,1)
+        //To check: can use grad[t].dptr here?
+        gweightPart1 += dot(gradPart1, src[t]);  //aggregate all updates for this weight matrix together
+        Tensor<cpu, 2> gradPart2Slice (grad[t].mutable_cpu_data() + classsize_ + startVocabIndex, Shape2(endVocabIndex - startVocabIndex + 1, 1));
+        gweightPart2Slice += dot(gradPart2Slice, src[t]);
+
+        //Compute the gradient for the src layer, the loop is for various timestamps T; actually another part of gsrc will be added in RnnSigmoidLayer
+        Tensor<cpu, 2> gradPart1ForSrc (grad[t].mutable_cpu_data(), Shape2(1, classsize_));   //(1,10)
+        Tensor<cpu, 2> gradPart2SliceForSrc (grad[t].mutable_cpu_data() + classsize_ + startVocabIndex, Shape2(1, endVocabIndex - startVocabIndex + 1));  //(1,150)
+        gsrc[t] = dot(gradPart1ForSrc, weightPart1) + dot(gradPart2SliceForSrc, weightPart2Slice);
+    }
 }
 
 
