@@ -243,34 +243,33 @@ class RnnlmWordinputLayer: public Layer {
   Param* weight_;   //The weight matrix here is U, (vocab_size, |v|)
 };
 
+/********** for RNNLM example **********/
 /**
-  * 5-RnnlmWordparserLayer - TODO to complete later
+  * 7-RnnlmDataLayer - TODO to complete later
   */
-class RnnlmWordparserLayer: public Layer {
+class RnnlmDataLayer: public DataLayer{
  public:
-  using Layer::partition_dim;   //to check later?
-  using Layer::ComputeFeature;  //What does this mean?
-  using Layer::ComputeGradient;
-
+  using Layer::ComputeFeature;
   void Setup(const LayerProto& proto, int npartitions) override;
-  int partition_dim() const override;   //Need to return 0
-  void getVocabSize();
-
-  ~RnnlmWordparserLayer();
+  void ComputeFeature(Phase phase, Metric *perf) override;
+  ~RnnlmDataLayer();    //To add based on Chonho's version
  private:
   int windowsize_;
+  shared_ptr<DataShard> shard_;
 };
 
 /**
   * 6-RnnlmClassparserLayer - TODO to complete later
   */
-class RnnlmClassparserLayer: public Layer {
+class RnnlmClassParserLayer: public ParserLayer {
  public:
-  using Layer::partition_dim;   //to check later?
-  using Layer::ComputeFeature;  //What does this mean?
-  using Layer::ComputeGradient;
+  using ParserLayer::ParseRecords;
+  using Layer::partition_dim;   //to check later? using Layer:: or ParserLayer:: ?
+
 
   void Setup(const LayerProto& proto, int npartitions) override;
+  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
+
   int partition_dim() const override;   //Need to return 0
   void getVocabSize();
   void getClassSize();
@@ -281,11 +280,19 @@ class RnnlmClassparserLayer: public Layer {
 };
 
 /**
-  * 7-RnnlmDataLayer - TODO to complete later
+  * 5-RnnlmWordparserLayer - TODO to complete later
   */
-class RnnlmDataLayer: public Layer {
+class RnnlmWordParserLayer: public ParserLayer {
  public:
-  ~RnnlmDataLayer();
+  using ParserLayer::ParseRecords;
+  using Layer::partition_dim;   //to check later? using Layer:: or ParserLayer:: ?
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
+  int partition_dim() const override;   //Need to return 0
+  void getVocabSize();
+
+  ~RnnlmWordparserLayer();
 
  private:
   int windowsize_;

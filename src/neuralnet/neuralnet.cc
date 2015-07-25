@@ -34,6 +34,26 @@ void NeuralNet::RegisterLayers() {
   RegisterLayer(factory, SoftmaxLoss);
   RegisterLayer(factory, Split);
   RegisterLayer(factory, Tanh);
+
+
+    // for RNNLM example
+  /*
+  RegisterLayer(factory, RnnlmData);
+  RegisterLayer(factory, RnnlmClassParser);
+  RegisterLayer(factory, RnnlmWordParser);
+  RegisterLayer(factory, RnnlmWordInput);
+  RegisterLayer(factory, RnnlmInnerProduct);
+  RegisterLayer(factory, RnnlmSigmoid);
+  RegisterLayer(factory, RnnlmComputation);
+  */
+
+/*  - What is this?
+#ifdef USE_OPTIONAL_LAYER
+  RegisterLayer(factory, LMDBData);
+#endif
+*/
+
+
 }
 
 shared_ptr<NeuralNet> NeuralNet::Create(

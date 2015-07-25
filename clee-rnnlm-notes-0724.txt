@@ -1,0 +1,69 @@
+
+Note!
+search "RNNLM example" for add/update
+search "TODO CLEE" for comment/question
+
+
+-------------------------------------------------------------
+[src/proto/common.proto]
+
+  in record message
+    declare record for rnnlm
+
+  define each of the records
+  
+
+-------------------------------------------------------------
+[examples/rnnlm/create_shard.cc]
+
+  updated
+
+[examples/rnnlm/Makefile]
+
+  updated
+
+
+-------------------------------------------------------------
+[examples/rnnlm/job.conf]
+
+  note: I changed a few name
+
+
+-------------------------------------------------------------
+[src/proto/job.proto]
+
+  in LayerProto message
+    add/update LayerType
+    add/update declare message Proto for configuration
+
+  define each message Proto, corresponding to the declaration
+
+
+-------------------------------------------------------------
+build
+
+
+-------------------------------------------------------------
+[src/neuralnet/neuralnet.cc]
+
+  in NeuralNet::RegisterLayers()
+    add lines for registering layers  <--- compile error (why??? not solved yet)
+
+
+
+-------------------------------------------------------------
+on-going work...
+
+[include/neuralnet/layer.h]
+
+  define class for each layer
+	RnnlmDataLayer
+	RnnlmClassParserLayer
+	RnnlmWordParserLayer
+
+[src/neuralnet/layer.cc]
+
+  implement details for each layer
+	RnnlmDataLayer
+	RnnlmClassParserLayer
+	RnnlmWordParserLayer
