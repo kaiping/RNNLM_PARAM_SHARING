@@ -9,126 +9,113 @@
 
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <cstdint>
-#include <iostream>
 #include <fstream>
 #include <string>
-#include <unordered_map>
 #include <map>
-#include <set>
+#include <vector>
 
 #include "utils/data_shard.h"
 #include "utils/common.h"
 #include "proto/common.pb.h"
 
 using singa::DataShard;
-using singa::WriteProtoToBinaryFile;
-using std::string;
 
-// key: word index, value: pair of <start, end> of word index
-typedef std::map< int, std::pair<int,int> > ClassMap;
-// key: word, value: tuple of <word index, word freq, class index>
-typedef std::unordered_map< string, std::tuple<int,int,int> > WordMap;
-// pair of <word freq, word>, used for sorting
-typedef std::set< std::pair<int,string> > IntStrSet;
-typedef std::unordered_map< string, int> StrIntMap;
+using StrIntGreaterMap =  std::map<std::string, int, std::greater<std::string> >;
 
-void displayMap(WordMap &wmap, ClassMap &cmap) {
-  for (WordMap::iterator p = wmap.begin(); p != wmap.end(); ++p) {
-    std::cout << p->first << "\t"
-              << std::get<0>(p->second) << "\t"
-              << std::get<1>(p->second) << "\t"
-              << std::get<2>(p->second) << "\n";
-  }
-  std::cout << cmap[1].first << " " << cmap[1].second << ", "
-            << cmap[2].first << " " << cmap[2].second << ", "
-            << cmap[3].first << " " << cmap[3].second << "\n";
 
-  std::cout << "# of words " << wmap.size() << "\n";
-}
+void create_shard(const char *input, const char *classOutput, const char *wordOutput, int nclass) {
+    // load input file
+    std::ifstream in(input);
+    CHECK(in) << "Unable to open file " << input;
 
-void create_shard(const char* input, const char* output) {
-
-  // Open file
-  std::ifstream in(input);
-  CHECK(in) << "Unable to open file " << input;
-
-  // Count word frequency, sort the map, compute class index
-  uint8_t nclass = 3;
-  uint32_t nwords = 0;
-  WordMap myWordMap;
-  ClassMap myClassMap;
-  IntStrSet wordset;
-  StrIntMap wordmap;
-  string word;
-  char delim[] = ".,':;";
-  
-  while (in >> word) {
-    // TODO CLEE take care of 'article', 'plural', etc of words
-    std::size_t pos = word.find_first_of(delim);
-    ++wordmap[(pos==string::npos) ? word : word.substr(0,pos)]; 
-    ++nwords;
-  }
-
-  for (StrIntMap::iterator p = wordmap.begin(); p != wordmap.end(); ++p)
-    wordset.emplace( std::make_pair(p->second, p->first) );
-
-  int wordIdx=1, start=wordIdx, count=0, classIdx=1;
-  for (IntStrSet::reverse_iterator p = wordset.rbegin(); p != wordset.rend(); ++p) {
-    count += p->first;
-    if(classIdx < nclass && count > classIdx*nwords/nclass) {
-      myClassMap[classIdx] = std::make_pair(start,wordIdx-1);
-      start = wordIdx;
-      classIdx++;
+    // calc word's frequency, sort by map
+    std::string word;
+    StrIntGreaterMap wordFreqMap;
+    while (in >> word) {
+        // TODO(kaiping): improve tokenize logic for complex input format (such as symbols)
+        ++wordFreqMap[word];
     }
-    myWordMap[p->second] = std::make_tuple(wordIdx++,p->first,classIdx);
-  }
-  myClassMap[classIdx] = std::make_pair(start,wordIdx-1); // <-- last class index
+    nwords = wordFreqMap.size();
 
-  //displayMap(myWordMap, myClassMap);
-  wordset.clear();
-  wordmap.clear();
+    // index words after sorting, and split words into classes by freq
+    std::vector<std::pair<int, int> > classInfo;
+    StrIntGreaterMap wordIdxMap, wordClassIdxMap;
+    int classIdxCnt = 0;
+    int tmpWordCnt = 0;
+    int lastStartPos = 0;
+    int curWordIdx = 0;
+    for (auto it : wordFreqMap) {
+        // index words
+        if (wordIdxMap.end() == wordIdxMap.find(it->first)) {
+            wordIdxMap[it->first] = wordIdxMap.size();
+        }
 
-  // Create datashard
-  DataShard shard(output, DataShard::kCreate);
-  singa::Record record;
-  singa::WordClassRecord* wordclass = record.mutable_recordclass();
-  singa::SingleWordRecord* singleword = record.mutable_recordword();
-  const int kMaxKeyLength = 10;
-  char key[kMaxKeyLength];
-  int item_id = 0;
- 
-  for (ClassMap::iterator p = myClassMap.begin(); p != myClassMap.end(); ++p) {
-    wordclass->set_start( p->second.first );    
-    wordclass->set_end( p->second.second );    
-    snprintf(key, kMaxKeyLength, "%08d", item_id++);
-    shard.Insert(string(key), record);
-  }
-  
-  for (WordMap::iterator p = myWordMap.begin(); p != myWordMap.end(); ++p) {
-    singleword->set_name( p->first );
-    singleword->set_vocab_index( std::get<0>(p->second) );
-    //singleword->set_freq( std::get<1>(p->second) ); // ignore. word frequency
-    singleword->set_class_index( std::get<2>(p->second) );
-    snprintf(key, kMaxKeyLength, "%08d", item_id++);
-    shard.Insert(string(key), record);
-  }
-  myClassMap.clear();
-  myWordMap.clear();
-  shard.Flush();
+        // generate classes
+        tmpWordCnt += it->second;
+        wordClassIdxMap[it->first] = classIdxCnt;
+
+        // split a new class
+        // ensure no empty class
+        if ((tmpWordCnt > (classIdxCnt + 1) * nwords / nclass) || (nwords - curWordIdx) <= nclass - classIdxCnt) {
+            classInfo.emplace_back(std::make_pair(lastStartPos, curWordIdx));
+            lastStartPos = curWordIdx + 1;
+            ++classIdxCnt;
+        }
+
+        ++curWordIdx;
+    }
+
+    // generate class data
+    const int kMaxKeyLength = 10;
+    char key[kMaxKeyLength];
+    DataShard classShard(classOutput, DataShard::kCreate);
+    singa::Record record;
+    record.set_type(singa::Record::kWordClass);
+    singa::WordClassRecord *classRecord = record.mutable_class();
+    for (int i = 0; i != classInfo.size(); ++i) {
+        classRecord->set_start(classInfo[i].first);
+        classRecord->set_end(classInfo[i].second);
+        classRecord->set_class_index(i);
+        snprintf(key, kMaxKeyLength, "%08d", i);
+        classShard.Insert(std::string(key), record);
+    }
+    classShard.Flush();
+    record.clear_class();
+
+    // generate word data
+    // reset input stream status for second loading
+    in.clear();
+    in.seekg(0, std::ios_base::beg);
+    DataShard wordShard(wordOutput, DataShard::kCreate);
+    record.set_type(singa::Record::kWordClass);
+    singa::SingleWordRecord *wordRecord = record.mutable_word();
+    int wordStreamCnt = 0;
+    while (in >> word) {
+        // TODO (kaiping): do not forget here if modify tokenize logic
+        auto classIdxIter = wordClassIdxMap.find(word);
+        if (wordClassIdxMap.end() == iter) continue;
+        wordRecord->set_name(word);
+        wordRecord->set_word_index(wordIdxMap[word]);
+        wordRecord->set_class_index(classIdxIter->second);
+        snprintf(key, kMaxKeyLength, "%08d", i++);
+        wordShard.Insert(std::string(key), record);
+    }
+    wordShard.Flush();
 }
 
-int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cout << "This program create a DataShard for a RNNLM dataset\n"
-        "The RNNLM dataset could be downloaded at\n"
-        "    http://www.rnnlm.org/\n"
-        "You should gunzip them after downloading.\n"
-        "Usage:\n"
-        "    create_shard.bin  input_file output_dirname";
-  } else {
-    google::InitGoogleLogging(argv[0]);
-    create_shard(argv[1], argv[2]);
-  }
-  return 0;
+int main(int argc, char **argv) {
+    if (argc != 5) {
+        std::cout << "This program create a DataShard for a RNNLM dataset\n"
+                "The RNNLM dataset could be downloaded at\n"
+                "    http://www.rnnlm.org/\n"
+                "You should gunzip them after downloading.\n"
+                "Usage:\n"
+                "    create_shard.bin input_file output_class_path, output_word_path, class_size";
+    } else {
+        google::InitGoogleLogging(argv[0]);
+        int classSize = atoi(argv[4]);
+        CHECK(classSize) << "class size parse failed. [" << argv[4] << "]";
+        create_shard(argv[1], argv[2], argv[3], classSize);
+    }
+    return 0;
 }
