@@ -411,9 +411,10 @@ message RnnlmWordinputProto {
 // 7-Message that stores parameters used by RnnlmDataLayer
 message RnnlmDataProto {
   // path to the data file/folder, absolute or relative to the workspace
-  required string path = 1;
+  required string class_path = 1;
+  required string word_path = 2;
   // window size.
-  required int32 window_size = 2;
+  required int32 window_size = 3;
 }
 
 message UpdaterProto {

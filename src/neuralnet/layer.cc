@@ -515,15 +515,30 @@ void RnnlmWordinputLayer::ComputeGradient(Phase phas) {
 // Implementation for RnnmlDataLayer
 void RnnlmDataLayer::Setup(const LayerProto& proto, int npartitions) {
   Layer::Setup(proto, npartitions);
-  shard_ = std::make_shared<DataShard>(
-		proto.rnnlmdata_conf().path(),
+  classshard_ = std::make_shared<DataShard>(
+		proto.rnnlmdata_conf().class_path(),
 		DataShard::kRead);
-  string key;
-  shard_->Next(&key, &sample_);   // TODO CLEE what is this line for???
-  window_size_ = proto.rnnlmdata_conf().window_size();
+  wordshard_ = std::make_shared<DataShard>(
+		proto.rnnlmdata_conf().word_path(),
+		DataShard::kRead);
+  string class_key, word_key;
+  classshard_->Next(&class_key, &sample_);
+  wordshard_->Next(&word_key, &sample_);
+  windowsize_ = proto.rnnlmdata_conf().window_size();
 
-  random_skip_=proto.rnnlmdata_conf().random_skip();
+  /*if(partition_dim() == 0)
+  batchsize_ /= npartitions;*/  //No need to consider partitioning now
+
+  records_.resize(windowsize_ + 1);
+  //random_skip_=proto.rnnlmdata_conf().random_skip();  //No need to consider random_skip now
+
+  //Obtain values for class_size and vocab_size
+  classsize_ = classshard_.count();
+  //? how to extract the maximum end vocab_idx?
+
 }
+
+
 void RnnlmDataLayer::ComputeFeature(Phase phase, Metric* perf){
   if(random_skip_){
     int nskip = rand() % random_skip_;
