@@ -86,8 +86,8 @@ message Record {
   optional Type type = 1 [default = kSingleLabelImage];
   // configuration for
   optional SingleLabelImageRecord image = 2;
-  optional WordClassRecord class = 3;
-  optional SingleWordRecord word = 4;
+  optional WordClassRecord class_record = 3;
+  optional SingleWordRecord word_record = 4;
 }
 
 message SingleLabelImageRecord {
