@@ -486,7 +486,7 @@ void RnnlmWordinputLayer::Setup(const LayerProto& proto, int npartitions) {
   grad_.ReshapeLike(data_);
   Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
   weight_ = factory->Create("Param");
-  vocabsize_ = dynamic_cast<RnnlmWordparserLayer>(srclayers_[0])->getVocabSize();   //use type casting
+  vocabsize_ = dynamic_cast<RnnlmWordparserLayer>(srclayers_[0])->vocabsize();   //use type casting static_cast or dynamic_cast?
   weight_->Setup(proto.param(0), vector<int>{vocabsize_, hdim_});
 }
 
@@ -509,10 +509,40 @@ void RnnlmWordinputLayer::ComputeGradient(Phase phas) {
    }
 }
 
+/*********** 5-Implementation for RnnlmWordparserLayer **********/
+void RnnlmWordParserLayer::Setup(const LayerProto& proto, int npartitions){
+  Layer::Setup(proto, npartitions);
+  CHECK_EQ(srclayers_.size(), 1);
+  windowsize_ = static_cast<DataLayer*>(srclayers_[0])->windowsize();
+  vocabsize_ = static_cast<DataLayer*>(srclayers_[0])->vocabsize();
+  data_.Reshape(vector<int>{windowsize_, 1});
+}
+void RnnlmWordParserLayer::ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob){
+    for(int i = 0; i < records.size() - 1; i++){//The first windowsize_ records in input "windowsize_ + 1" records
+        data_[i] = records[i].word_record().word_index();
+    }
+}
 
+/*********** 6-Implementation for RnnlmClassparserLayer **********/
+void RnnlmClassParserLayer::Setup(const LayerProto& proto, int npartitions){
+  Layer::Setup(proto, npartitions);
+  CHECK_EQ(srclayers_.size(), 1);
+  windowsize_ = static_cast<DataLayer*>(srclayers_[0])->windowsize();
+  vocabsize_ = static_cast<DataLayer*>(srclayers_[0])->vocabsize();
+  classsize_ = static_cast<DataLayer*>(srclayers_[0])->classsize();
+  data_.Reshape(vector<int>{windowsize_, 4});
+}
+void RnnlmClassParserLayer::ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob){
+    for(int i = 1; i < records.size(); i++){//The last windowsize_ records in input "windowsize_ + 1" records
+        int tmp_class_idx = records[i].word_record().class_index();
+        data_[i][0] = (*(static_cast<DataLayer*>(srclayers_[0])->classinfo()))[tmp_class_idx][0];
+        data_[i][1] = (*(static_cast<DataLayer*>(srclayers_[0])->classinfo()))[tmp_class_idx][1];
+        data_[i][2] = records[i].word_record().word_index();
+        data_[i][3] = tmp_class_idx;
+    }
+}
 
-/*************** for RNNLM example: the original is Chonho's version *******************/
-// Implementation for RnnmlDataLayer
+/*********** 7-Implementation for RnnlmDataLayer **********/
 void RnnlmDataLayer::Setup(const LayerProto& proto, int npartitions) {
   Layer::Setup(proto, npartitions);
   classshard_ = std::make_shared<DataShard>(
@@ -522,94 +552,53 @@ void RnnlmDataLayer::Setup(const LayerProto& proto, int npartitions) {
 		proto.rnnlmdata_conf().word_path(),
 		DataShard::kRead);
   string class_key, word_key;
-  classshard_->Next(&class_key, &sample_);
-  wordshard_->Next(&word_key, &sample_);
   windowsize_ = proto.rnnlmdata_conf().window_size();
-
-  /*if(partition_dim() == 0)
-  batchsize_ /= npartitions;*/  //No need to consider partitioning now
-
   records_.resize(windowsize_ + 1);
-  //random_skip_=proto.rnnlmdata_conf().random_skip();  //No need to consider random_skip now
+  classsize_ = classshard_.count(); //First read through class_shard and obtain values for class_size and vocab_size
+  classinfo_.Reshape(vector<int>{classsize_, 2})    //classsize_ rows and 2 columns
 
-  //Obtain values for class_size and vocab_size
-  classsize_ = classshard_.count();
-  //? how to extract the maximum end vocab_idx?
-
+  int max_vocabidx_end = 0;
+  for(int i = 0; i < classsize_; i++){
+    classshard_->Next(&class_key, &sample_);
+    classinfo_[i][0] = sample.class_record().start();
+    classinfo_[i][1] = sample.class_record().end();
+    if(sample.class_record().end() > max_vocabidx_end){
+        max_vocabidx_end = sample.class_record().end();
+    }
+  }
+  vocabsize_ = max_vocabidx_end + 1;
+  wordshard_->Next(&word_key, &records_[windowsize_]);    //Then read the 1st record in word_shard and assign it to records_[windowsize_] for convenience & consistency in ComputeFeature()
 }
 
 
 void RnnlmDataLayer::ComputeFeature(Phase phase, Metric* perf){
-  if(random_skip_){
-    int nskip = rand() % random_skip_;
-    LOG(INFO)<<"Random Skip "<<nskip<<" records, there are "<<shard_->Count()
-      <<" records in total";
+  /*
+  records_[0] = records_[windowsize_];
+  for(int i = 1; i < records_.size(); i++){  //size of records_ is windowsize_ + 1; range: [1, windowsize_]
     string key;
-    for(int i=0;i<nskip;i++){
-      shard_->Next(&key, &sample_);  // TODO CLEE what is sample???
+    if(!wordshard_->Next(&key, &records_[i])){   // when remaining # of words is fewer than windowsize_
+      wordshard_->SeekToFirst();
+      CHECK(wordshard_->Next(&key, &records_[i]));
     }
-    random_skip_=0;
-  }
-  for(auto& record: records_){
-    string key;
-    if(!shard_->Next(&key, &record)){
-      shard_->SeekToFirst();
-      CHECK(shard_->Next(&key, &record));
-    }
-  }
-
-  // TODO CLEE
-  // parse record and get numClass and numVocab here ???
-  // if so, we need to define record for this parameter in common.proto
-  //  or any another way???
-
-
+  }*/   //When not throw the ending words ( < window_size)
+  CHECK(records_.size() <= wordshard_ -> count());
+  records_[0] = records_[windowsize_];
+  while (true) {
+	bool flag = true;
+	for (int i = 1; i < records_.size(); i++) { //size of records_ is windowsize_ + 1; range: [1, windowsize_]
+		string key;
+		if (!wordshard_->Next(&key, &records_[i])) { //When throwing the ending words ( < window_size)
+			wordshard_->SeekToFirst();
+			flag = false;
+			break;
+		}
+	}
+	if (flag == true) break;
 }
-// Implementation for RnnlmClassParserLayer
-void RnnlmClassParserLayer::Setup(const LayerProto& proto, int npartitions){
-  Layer::Setup(proto, npartitions);
-  CHECK_EQ(srclayers_.size(), 1);
-  // TODO CLEE
-  //window_size_ = static_cast<DataLayer*>(srclayers_[0])->window_size();
-  // get numClass from source layer?
-  // get numVocab from source layer?
-
 }
-void RnnlmClassParserLayer::ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob){
-  int rid=0;
-  //float *label= blob->mutable_cpu_data();
 
-  // TODO CLEE
-  // quadruple of <start, end, word idx, class idx> of 10 words (shift 1)
 
-  //for(const Record& record: records) {
-    //record.recordclass().start();
-    //record.recordclass().end();
-    //record.recordword().name();
-    //record.recordword().vocab_index();
-    //record.recordword().class_index();
 
-    //CHECK_LT(record.image().label(),10);
-  //}
-  CHECK_EQ(rid, blob->shape()[0]);
-}
-// Implementation for RnnlmWordParserLayer
-void RnnlmWordParserLayer::Setup(const LayerProto& proto, int npartitions){
-  Layer::Setup(proto, npartitions);
-  CHECK_EQ(srclayers_.size(), 1);
-  // TODO CLEE
-  //window_size_ = static_cast<DataLayer*>(srclayers_[0])->window_size();
-  // numClass
-  // numVocab
-}
-void RnnlmWordParserLayer::ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob){
-
-  int rid=0;
-  // TODO CLEE
-  // quadruple of <start, end, word idx, class idx> of 10 words
-
-  CHECK_EQ(rid, blob->shape()[0]);
-}
 
 
 /*****************************************************************************

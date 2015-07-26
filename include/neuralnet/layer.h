@@ -243,62 +243,96 @@ class RnnlmWordinputLayer: public Layer {
   Param* weight_;   //The weight matrix here is U, (vocab_size, |v|)
 };
 
-/********** for RNNLM example **********/
 /**
-  * 7-RnnlmDataLayer - TODO to complete later
+  * 5-RnnlmWordparserLayer
+  */
+class RnnlmWordParserLayer: public ParserLayer {
+ public:
+  using ParserLayer::ParseRecords;
+  //using Layer::partition_dim;   //to check later? using Layer:: or ParserLayer:: ?
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
+  int partition_dim() const override{   //Need to return 0
+    return 0;
+  }
+
+  int vocabsize() const {
+    return vocabsize_;
+  }
+
+  ~RnnlmWordparserLayer();
+
+ private:
+  int windowsize_;
+  int vocabsize_;
+};
+
+/**
+  * 6-RnnlmClassparserLayer
+  */
+class RnnlmClassParserLayer: public ParserLayer {
+ public:
+  using ParserLayer::ParseRecords;
+
+  void Setup(const LayerProto& proto, int npartitions) override;
+  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
+
+  int partition_dim() const override{   //Need to return 0
+    return 0;
+  }
+
+  int classsize() const {
+    return classsize_;
+  }
+
+  int vocabsize() const {
+    return vocabsize_;
+  }
+
+  ~RnnlmClassparserLayer();
+ private:
+  int windowsize_;
+  int vocabsize_;
+  int classsize_;
+};
+
+/**
+  * 7-RnnlmDataLayer
   */
 class RnnlmDataLayer: public DataLayer{
  public:
   using Layer::ComputeFeature;
   void Setup(const LayerProto& proto, int npartitions) override;
   void ComputeFeature(Phase phase, Metric *perf) override;
-  ~RnnlmDataLayer();    //To add based on Chonho's version
- private:
-  int windowsize_;
-  shared_ptr<DataShard> shard_;
-};
+  //~RnnlmDataLayer();    //No need to write destructor function explicitly
+  int windowsize() const {
+    return windowsize_;
+  }
 
-/**
-  * 6-RnnlmClassparserLayer - TODO to complete later
-  */
-class RnnlmClassParserLayer: public ParserLayer {
- public:
-  using ParserLayer::ParseRecords;
-  using Layer::partition_dim;   //to check later? using Layer:: or ParserLayer:: ?
+  int classsize() const {
+    return classsize_;
+  }
 
+  int vocabsize() const {
+    return vocabsize_;
+  }
 
-  void Setup(const LayerProto& proto, int npartitions) override;
-  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
-
-  int partition_dim() const override;   //Need to return 0
-  void getVocabSize();
-  void getClassSize();
-
-  ~RnnlmClassparserLayer();
- private:
-  int windowsize_;
-};
-
-/**
-  * 5-RnnlmWordparserLayer - TODO to complete later
-  */
-class RnnlmWordParserLayer: public ParserLayer {
- public:
-  using ParserLayer::ParseRecords;
-  using Layer::partition_dim;   //to check later? using Layer:: or ParserLayer:: ?
-
-  void Setup(const LayerProto& proto, int npartitions) override;
-  void ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob) override;
-  int partition_dim() const override;   //Need to return 0
-  void getVocabSize();
-
-  ~RnnlmWordparserLayer();
+  Blob<int> * classinfo(){
+    return & classinfo_;
+  }
 
  private:
-  int windowsize_;
+  int windowsize_;  //there is a field "batchsize_" as a member of DataLayer
+  shared_ptr<DataShard> classshard_;
+  shared_ptr<DataShard> wordshard_;
+  int classsize_;
+  int vocabsize_;
+  Blob<int> classinfo_; //For each class index, info: start vocab_index, end vocab_index
+  vector<Record> classrecords_; //used for processing class records; The member "records_" in DataLayer is specified for use of WordRecords here
 };
 
-
+/********** end line for RNNLM example **********/
 
 class LabelLayer: public ParserLayer {
  public:
