@@ -243,8 +243,8 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
     const int * label = srclayers_[1]->data(this).cpu_data(); //The shape should be (windowsize_,4); a quadruple: start and end vocabulary index for the ground truth class; then the word index in vocabulary; then finally the class for the input word
     auto weight = Tensor2(weight_->mutable_data());
 
-    auto weightPart1 = weight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
-    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
+    auto weightPart1 = weight.Slice(0, classsize_);  //slice is [) form (10, 30), the slicing operation is by row
+    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_);  //(10000, 30), the slicing operation is by row
 
     //Compute y1(t), y2(t), then copy to data of RnnlmComputationLayer
     for(int t = 0; t < windowsize_; t++){
@@ -253,7 +253,7 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
         int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
         int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);  //?closed [start, end]
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);  //?closed [start, end]
         Tensor<cpu, 1> y1(data.dptr + hdim_ * t, shape1(classsize_));    //hdim_ = classsize_ + vocabsize_
         y1 = dot(sigmoidData[t], weightPart1.T());
         Tensor<cpu, 1> y2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, shape1(endVocabIndex - startVocabIndex + 1));
@@ -297,12 +297,12 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
     const int * label = srclayers_[1]->data(this).cpu_data();   //offer the ground truth info
 
     auto gweight = Tensor2(weight_->mutable_grad());    //the gradient for the parameter: weight matrix
-    auto gweightPart1 = gweight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
-    auto gweightPart2 = gweight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
+    auto gweightPart1 = gweight.Slice(0, classsize_);  //slice is [) form (10, 30), the slicing operation is by row
+    auto gweightPart2 = gweight.slice(classsize_, classsize_ + vocabsize_);  //(10000, 30), the slicing operation is by row
 
     auto weight = Tensor2(weight_->mutable_data());
-    auto weightPart1 = weight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
-    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
+    auto weightPart1 = weight.Slice(0, classsize_);  //(10, 30), the slicing operation is by row
+    auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_);  //(10000, 30), the slicing operation is by row
 
     if(srclayers_[0]->mutable_grad(this) != nullptr){
         auto gsrc = Tensor2(srclayers_[0]->mutable_grad(this)); //(10,30), i.e., (window_size, 30)
@@ -317,8 +317,8 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
         int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
         int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-        auto gweightPart2Slice = gweightPart2.slice(startVocabIndex, endVocabIndex);    //e.g, (150, 30), set # of words in ground truth class is 150
-        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);    //e.g, (150, 30), set # of words in ground truth class is 150
+        auto gweightPart2Slice = gweightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
 
         //Compute the gradient for the current layer
         //To check later: can compute values for one t and then back propagate the error/gradient?
