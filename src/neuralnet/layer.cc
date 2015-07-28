@@ -371,7 +371,7 @@ void RnnlmSigmoidLayer::Setup(const LayerProto& proto, int npartitions) {
     grad_.ReshapeLike(srclayers_[0]->grad(this));
     Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
     weight_ = factory->Create("Param");
-    weight_->Setup(proto.param(0), vector<int>{hdim_, hdim_});  // (30, 30) weight matrix between s(t-1) and s(t)
+    weight_->Setup(proto.param(0), vector<int>{vdim_, hdim_});  // (30, 30) weight matrix between s(t-1) and s(t)
 }
 
 void RnnlmSigmoidLayer::ComputeFeature(Phase phase, Metric* perf) {
@@ -395,25 +395,25 @@ void RnnlmSigmoidLayer::ComputeGradient(Phase phase){
     auto grad = Tensor2(&grad_);    //(win_size, 30)
     auto weight = Tensor2(weight_->mutable_data()); //(30,30)
     auto gweight = Tensor2(weight_->mutable_grad());    //the gradient for the parameter: weight matrix
-    if(srclayers_[0]->mutable_grad(this) != nullptr){   //Why have to check this?
+    if(srclayers_[0]->mutable_grad(this) != nullptr){
         auto gsrc = Tensor2(srclayers_[0]->mutable_grad(this)); //(10,30), i.e., (window_size, 30)
     }
 
 
     memset(gweight.dptr, 0 , sizeof(float) * gweight.shape[0] * gweight.shape[1]);   //Need initialization before aggregate updates in all timestamps
     //1-Update the gradient for the current layer, add a new term
-    for(int t = windowsize_ - 2; t > 0; t--){   //grad[windowsize_ - 1] does not have this term
+    for(int t = windowsize_ - 2; t >= 0; t--){   //grad[windowsize_ - 1] does not have this term
         grad[t] += dot(grad[t + 1], weight);
     }
 
     //2-Compute the gradient for the weight matrix; 3-Compute the gradient for src layer; the loop is for various timestamps T
     for(int t = 0; t < windowsize_; t++){
         if(t == 0){
-            gsrc[t] = F<op::sigmoid_grad>(data) * grad[t];  //here F<op::sigmoid_grad>(data) is a scalar value
+            gsrc[t] = F<op::sigmoid_grad>(data[t]) * grad[t];  //?here F<op::sigmoid_grad>(data) is a scalar value; make sure to use the final value of grad(t)
         }
         else{
             gweight += dot(data[t - 1].T(), grad[t]);   //aggregate all updates for this weight matrix
-            gsrc[t] = F<op::sigmoid_grad>(data) * grad[t];  //here F<op::sigmoid_grad>(data) is a scalar value
+            gsrc[t] = F<op::sigmoid_grad>(data[t]) * grad[t];  //?here F<op::sigmoid_grad>(data) is a scalar value
         }
     }
 }
@@ -432,11 +432,11 @@ void RnnlmInnerproductLayer::Setup(const LayerProto& proto, int npartitions) {
   windowsize_=src.shape()[0];
   vdim_=src.count()/windowsize_; //dimension of input, i.e., |V|
   hdim_=proto.innerproduct_conf().num_output(); //TODO add window_size() info in model.proto & model.conf, dimension of output, e.g, 30
-  data_.Reshape(vector<int>{windowsize_, hdim_});
+  data_.Reshape(vector<int>{windowsize_, hdim_});   //(win_size,30)
   grad_.ReshapeLike(data_);
   Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
   weight_ = factory->Create("Param");
-  weight_->Setup(proto.param(0), vector<int>{vdim_, hdim_});
+  weight_->Setup(proto.param(0), vector<int>{vdim_, hdim_});    //(|V|,30)
 }
 
 void RnnlmInnerproductLayer::ComputeFeature(Phase phase, Metric* perf) {
@@ -486,7 +486,7 @@ void RnnlmWordinputLayer::Setup(const LayerProto& proto, int npartitions) {
   grad_.ReshapeLike(data_);
   Factory<Param>* factory=Singleton<Factory<Param>>::Instance();
   weight_ = factory->Create("Param");
-  vocabsize_ = dynamic_cast<RnnlmWordparserLayer>(srclayers_[0])->vocabsize();   //use type casting static_cast or dynamic_cast?
+  vocabsize_ = static_cast<RnnlmWordparserLayer>(srclayers_[0])->vocabsize();   //use type casting static_cast or dynamic_cast?
   weight_->Setup(proto.param(0), vector<int>{vocabsize_, hdim_});
 }
 
@@ -515,7 +515,7 @@ void RnnlmWordParserLayer::Setup(const LayerProto& proto, int npartitions){
   CHECK_EQ(srclayers_.size(), 1);
   windowsize_ = static_cast<DataLayer*>(srclayers_[0])->windowsize();
   vocabsize_ = static_cast<DataLayer*>(srclayers_[0])->vocabsize();
-  data_.Reshape(vector<int>{windowsize_, 1});
+  data_.Reshape(vector<int>{windowsize_});  //Can use 1-dimension
 }
 void RnnlmWordParserLayer::ParseRecords(Phase phase, const vector<Record>& records, Blob<float>* blob){
     for(int i = 0; i < records.size() - 1; i++){//The first windowsize_ records in input "windowsize_ + 1" records
