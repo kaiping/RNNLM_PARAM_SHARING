@@ -1,4 +1,4 @@
-#include <glog/logging.h>
+#include <glog/logging.h> 
 #include <memory>
 #include <algorithm>
 #include <opencv2/highgui/highgui.hpp>
