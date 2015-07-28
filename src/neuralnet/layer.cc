@@ -1,4 +1,4 @@
-#include <glog/logging.h> 
+#include <glog/logging.h>
 #include <memory>
 #include <algorithm>
 #include <opencv2/highgui/highgui.hpp>
@@ -226,8 +226,8 @@ void RnnlmComputationLayer::Setup(const LayerProto& proto, int npartitions) {
     const auto& labelData = srclayers_[1]->data(this);  //The order of src layers are due to conf order; labelData has the shape (windowsize_,4)
     windowsize_= sigmoidData.shape()[0];
     vdim_ = sigmoidData.count()/windowsize_;   //e.g, 30; dimension of input
-    classsize_ = dynamic_cast<RnnlmClassparserLayer>(srclayers_[1])->getClassSize(); //10 here, use type casting
-    vocabsize_ = dynamic_cast<RnnlmClassparserLayer>(srclayers_[1])->getVocabSize(); //10000 here, use type casting
+    classsize_ = static_cast<RnnlmClassparserLayer>(srclayers_[1])->classsize(); //10 here, use type casting
+    vocabsize_ = static_cast<RnnlmClassparserLayer>(srclayers_[1])->vocabsize(); //10000 here, use type casting
     hdim_ = classsize_ + vocabsize_; //e.g, 10010 if VocabSize=10000, ClassSize=10; TODO implement getVocabSize() and getClassSize() on LabelLayer
     data_.Reshape(vector<int>{windowsize_, hdim_});
     grad_.ReshapeLike(data_);
@@ -253,7 +253,7 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
         int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
         int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);  //?closed [start, end]
         Tensor<cpu, 1> y1(data.dptr + hdim_ * t, shape1(classsize_));    //hdim_ = classsize_ + vocabsize_
         y1 = dot(sigmoidData[t], weightPart1.T());
         Tensor<cpu, 1> y2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, shape1(endVocabIndex - startVocabIndex + 1));
@@ -273,7 +273,7 @@ void RnnlmComputationLayer::ComputeFeature(Phase phase, Metric* perf) {
         AllocSpace(p2); //Allocate the space for p2
 
         Tensor<cpu, 1> tmp1(data.dptr + hdim_ * t, Shape1(classsize_));
-        Tensor<cpu, 1> tmp2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, Shape1(endVocabIndex - startVocabIndex - 1));
+        Tensor<cpu, 1> tmp2(data.dptr + hdim_ * t + classsize_ + startVocabIndex, Shape1(endVocabIndex - startVocabIndex + 1));
 
         Softmax(p1, tmp1);
         Softmax(p2, tmp2);   //In Softmax(), tmp1 and tmp2 are not changed
@@ -294,8 +294,6 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
     auto data = Tensor2(&data_);    //(win_size, 10010)
     auto grad = Tensor2(&grad_);    //(win_size, 10010)
     auto src = Tensor2(srclayers_[0]->mutable_data(this));
-    //auto gradPart1 = grad.T().Slice(0, classsize_ - 1); //Here we bring the slicing operation inside (10, 30)
-    //auto gradPart2 = grad.T().Slice(classsize_, classsize_ + vocabsize_ - 1);   //(10000, 30)
     const int * label = srclayers_[1]->data(this).cpu_data();   //offer the ground truth info
 
     auto gweight = Tensor2(weight_->mutable_grad());    //the gradient for the parameter: weight matrix
@@ -306,7 +304,7 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
     auto weightPart1 = weight.Slice(0, classsize_ - 1);  //(10, 30), the slicing operation is by row
     auto weightPart2 = weight.slice(classsize_, classsize_ + vocabsize_ - 1);  //(10000, 30), the slicing operation is by row
 
-    if(srclayers_[0]->mutable_grad(this) != nullptr){   //Why have to check this?
+    if(srclayers_[0]->mutable_grad(this) != nullptr){
         auto gsrc = Tensor2(srclayers_[0]->mutable_grad(this)); //(10,30), i.e., (window_size, 30)
     }
 
@@ -319,18 +317,18 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
         int wordIndex = static_cast<int>(label[t * 4 + 2]); //ground truth word index
         int classIndex = static_cast<int>(label[t * 4 + 3]);    //ground truth class index
 
-        auto gweightPart2Slice = gweightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
-        auto gradPart2Slice = gradPart2.slice(startVocabIndex. endVocabIndex + 1);  //e.g, (150, win_size)
-        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex + 1);    //e.g, (150, 30), set # of words in ground truth class is 150
+        auto gweightPart2Slice = gweightPart2.slice(startVocabIndex, endVocabIndex);    //e.g, (150, 30), set # of words in ground truth class is 150
+        auto weightPart2Slice = weightPart2.slice(startVocabIndex, endVocabIndex);    //e.g, (150, 30), set # of words in ground truth class is 150
 
         //Compute the gradient for the current layer
+        //To check later: can compute values for one t and then back propagate the error/gradient?
         for(int i = 0; i < classsize_; i++){
             grad[t][i] = 0 - data[t][i];
         }
         grad[t][classIndex] = 1 - data[t][classIndex];  //Compute ground truth for the class
 
         for(int j = classsize_; j < classsize_ + vocabsize_; j++){
-            if(j >= classsize_ + startVocabIndex && j <= classsize_ + endVocabIndex) {
+            if(j >= (classsize_ + startVocabIndex) && j <= (classsize_ + endVocabIndex)) {
                 grad[t][j] = 0 - data[t][j];
             }
             else {
@@ -341,7 +339,6 @@ void RnnlmComputationLayer::ComputeGradient(Phase phase){
 
         //Compute the gradient for the weight matrix, the loop is for various timestamps T
         Tensor<cpu, 2> gradPart1 (grad[t].mutable_cpu_data(), Shape2(classsize_, 1));   //(10,1)
-        //To check: can use grad[t].dptr here?
         gweightPart1 += dot(gradPart1, src[t]);  //aggregate all updates for this weight matrix together
         Tensor<cpu, 2> gradPart2Slice (grad[t].mutable_cpu_data() + classsize_ + startVocabIndex, Shape2(endVocabIndex - startVocabIndex + 1, 1));
         gweightPart2Slice += dot(gradPart2Slice, src[t]);
@@ -417,7 +414,7 @@ void RnnlmSigmoidLayer::ComputeGradient(Phase phase){
         }
     }
 }
-  
+
 
 /*********** 3-Implementation for RnnlmInnerproductLayer **********/
 //The only difference between this layer type and ordinary InnerProductLayer is the consideration of window_size, i.e., time
