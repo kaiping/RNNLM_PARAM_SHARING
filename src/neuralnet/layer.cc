@@ -417,7 +417,7 @@ void RnnlmSigmoidLayer::ComputeGradient(Phase phase){
         }
     }
 }
-
+  
 
 /*********** 3-Implementation for RnnlmInnerproductLayer **********/
 //The only difference between this layer type and ordinary InnerProductLayer is the consideration of window_size, i.e., time
